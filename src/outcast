@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# =============================================================================
+# outcast — Outcast · Launcher
+# =============================================================================
+
+set -euo pipefail
+
+readonly OUTCAST_VERSION="0.20.0"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# When installed, the program logic lives in /usr/lib/outcast; when run from a
+# source checkout it sits next to this launcher.
+LIBDIR="/usr/lib/outcast"
+
+case "${1:-}" in
+    --update)
+        WORKER="${SCRIPT_DIR}/outcast-worker.sh"
+        [[ -f "$WORKER" ]] || WORKER="${LIBDIR}/outcast-worker.sh"
+        exec "$WORKER" --crawl-only
+        ;;
+    --version|-V)
+        printf 'outcast %s\n' "$OUTCAST_VERSION"
+        exit 0
+        ;;
+    --help|-h)
+        cat << HELP
+outcast ${OUTCAST_VERSION} — personal feed browser for YouTube/Twitch/Kick (PySide6 GUI)
+
+USAGE
+  outcast              Open the feed browser
+  outcast --update     Update the cache headlessly
+  outcast --help       Show this help
+HELP
+        exit 0
+        ;;
+    "")
+        : # fall through to launch
+        ;;
+    *)
+        printf 'Unknown option: %s\nTry: outcast --help\n' "$1" >&2
+        exit 1
+        ;;
+esac
+
+# Check dependencies
+command -v python3 >/dev/null 2>&1 || { echo "ERROR: python3 not found."; exit 1; }
+command -v mpv >/dev/null 2>&1 || { echo "ERROR: mpv not found."; exit 1; }
+
+python3 -c "import PySide6" 2>/dev/null || {
+    echo "ERROR: PySide6 is not installed. Run: sudo pacman -S pyside6"
+    exit 1
+}
+
+UI="${SCRIPT_DIR}/outcast.py"
+[[ -f "$UI" ]] || UI="${LIBDIR}/outcast.py"
+
+exec python3 "$UI"

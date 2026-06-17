@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# makepkg / build artifacts
+pkg/
+*.pkg.tar.zst
+*.pkg.tar.xz
+*.tar.gz
+*.tar.zst
+# makepkg creates its own src/ and pkg/ while building; the versioned source
+# lives under src/ already, so ignore only the build leftovers, not the tree.
+/src/*.pkg.tar.*
+
+# Editor / OS
+*.swp
+*~
+.idea/
+.vscode/
+.DS_Store
+.PKGBUILD
+.SRCINFO

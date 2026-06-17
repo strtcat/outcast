@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Outcast
+GenericName=Feed Player
+Comment=Keyboard-first feed aggregator and player for YouTube, Twitch and Kick
+Exec=outcast
+Icon=multimedia-video-player
+Terminal=false
+Categories=AudioVideo;Player;Network;
+Keywords=youtube;twitch;kick;feed;rss;mpv;video;stream;
+StartupNotify=true

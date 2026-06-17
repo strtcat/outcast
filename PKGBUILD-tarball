@@ -1,0 +1,49 @@
+# Maintainer: strtcat
+pkgname=outcast
+pkgver=0.20.0
+pkgrel=1
+pkgdesc="Keyboard-first personal feed aggregator and player for YouTube, Twitch and Kick (PySide6/Qt)"
+arch=('any')
+url="https://github.com/strtcat/outcast"
+license=('MIT')
+depends=(
+    'python'
+    'pyside6'
+    'mpv'
+    'yt-dlp'
+    'curl'
+)
+optdepends=(
+    'streamlink: Twitch live streams and VODs'
+    'python-curl_cffi: required to list Kick VODs and live streams'
+    'imagemagick: thumbnail resizing/compression (lighter cache)'
+    'graphicsmagick: alternative thumbnail resizing backend'
+    'ffmpeg: fallback thumbnail resizing if ImageMagick/GraphicsMagick are absent'
+    'libnotify: desktop notifications'
+)
+install="$pkgname.install"
+source=("$pkgname-$pkgver.tar.gz::https://github.com/strtcat/outcast/archive/refs/tags/v$pkgver.tar.gz")
+# Run `updpkgsums` after the v0.20.0 tag exists to replace this with the real hash.
+sha256sums=('SKIP')
+
+package() {
+    cd "$srcdir/$pkgname-$pkgver"
+
+    # Program logic under /usr/lib/outcast.
+    install -Dm644 src/outcast.py        "$pkgdir/usr/lib/outcast/outcast.py"
+    install -Dm644 src/i18n.py           "$pkgdir/usr/lib/outcast/i18n.py"
+    install -Dm644 src/outcast_db.py     "$pkgdir/usr/lib/outcast/outcast_db.py"
+    install -Dm755 src/outcast-worker.sh "$pkgdir/usr/lib/outcast/outcast-worker.sh"
+    install -Dm755 src/outcast-live.sh   "$pkgdir/usr/lib/outcast/outcast-live.sh"
+
+    # Translation catalogs (XDG data dir).
+    install -Dm644 src/locales/en.json   "$pkgdir/usr/share/outcast/locales/en.json"
+    install -Dm644 src/locales/es.json   "$pkgdir/usr/share/outcast/locales/es.json"
+
+    # Executable launcher on PATH.
+    install -Dm755 src/outcast           "$pkgdir/usr/bin/outcast"
+
+    # Desktop entry + license.
+    install -Dm644 outcast.desktop       "$pkgdir/usr/share/applications/outcast.desktop"
+    install -Dm644 LICENSE               "$pkgdir/usr/share/licenses/outcast/LICENSE"
+}

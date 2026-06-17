@@ -1,0 +1,25 @@
+post_install() {
+    cat <<'MSG'
+
+Outcast installed.
+
+  * Run it from your launcher or with:  outcast
+  * Headless cache update:              outcast --update
+
+  Subscriptions live in ~/.config/outcast/ (XDG_CONFIG_HOME):
+      subscriptions   one YouTube channel URL/handle per line
+      twitch          one Twitch channel per line   (optional)
+      kick            one Kick channel per line      (optional)
+
+  Caches live in ~/.cache/outcast-feed, ~/.cache/outcast-thumbs and
+  ~/.cache/outcast-channel-ids (XDG_CACHE_HOME).
+
+  Kick support (VODs and live) needs python-curl_cffi.
+  Switch the UI language anytime in Settings -> General -> Language.
+
+MSG
+}
+
+post_upgrade() {
+    post_install
+}
