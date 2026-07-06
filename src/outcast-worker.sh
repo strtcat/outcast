@@ -880,19 +880,27 @@ run_crawler() {
             continue
         fi
 
-        # Build a map of vid_id → "title\tchannel\tdate" from the RSS,
-        # and the list of IDs that are genuinely new (not in cache yet).
-        local new_ids_file rss_map_file
+        # From the RSS, derive three things:
+        #   - new_ids : IDs not yet in the cache (get a full insert w/ duration)
+        #   - rss_map : vid_id -> "title\tchannel\tdate" (for the new-video loop)
+        #   - refresh : full rows for videos ALREADY cached but still in the RSS,
+        #               so an upstream rename/edit refreshes the stored metadata.
+        #               Duration is left as '?' (upsert preserves the known one)
+        #               and channel_id is filled in (also backfills old rows).
+        local new_ids_file rss_map_file refresh_file
         new_ids_file=$(mktemp /tmp/outcast-newids-XXXX)
         rss_map_file=$(mktemp /tmp/outcast-rssmap-XXXX)
+        refresh_file=$(mktemp /tmp/outcast-refresh-XXXX)
 
-        python3 - "$rssfile" "$cached_ids_file" "$new_ids_file" "$rss_map_file" << 'PYEOF'
+        python3 - "$rssfile" "$cached_ids_file" "$new_ids_file" "$rss_map_file" "$refresh_file" "$channel_id" << 'PYEOF'
 import sys
 
-rss_path    = sys.argv[1]
-cached_path = sys.argv[2]
-out_ids     = sys.argv[3]
-out_map     = sys.argv[4]
+rss_path     = sys.argv[1]
+cached_path  = sys.argv[2]
+out_ids      = sys.argv[3]
+out_map      = sys.argv[4]
+out_refresh  = sys.argv[5]
+channel_id   = sys.argv[6] if len(sys.argv) > 6 else ''
 
 cached = set()
 try:
@@ -905,7 +913,8 @@ except FileNotFoundError:
     pass
 
 new_ids = []
-rss_map = {}   # vid_id -> "title\tchannel\tdate"
+rss_map = {}       # vid_id -> "title\tchannel\tdate"
+refresh_rows = []  # full 8-col rows for already-cached videos
 try:
     with open(rss_path) as fh:
         for line in fh:
@@ -915,8 +924,14 @@ try:
             vid = parts[0].strip()
             if not vid:
                 continue
-            rss_map[vid] = f'{parts[1]}\t{parts[2]}\t{parts[3]}'
-            if vid not in cached:
+            title, channel, date = parts[1], parts[2], parts[3]
+            rss_map[vid] = f'{title}\t{channel}\t{date}'
+            if vid in cached:
+                url = f'https://www.youtube.com/watch?v={vid}'
+                refresh_rows.append(
+                    f'{vid}\t{title}\t{channel}\t{date}\t?\tyoutube\t{url}\t{channel_id}'
+                )
+            else:
                 new_ids.append(vid)
 except FileNotFoundError:
     pass
@@ -928,7 +943,21 @@ with open(out_ids, 'w') as fh:
 with open(out_map, 'w') as fh:
     for vid, meta in rss_map.items():
         fh.write(f'{vid}\t{meta}\n')
+
+with open(out_refresh, 'w') as fh:
+    if refresh_rows:
+        fh.write('\n'.join(refresh_rows) + '\n')
 PYEOF
+
+        # Refresh metadata of already-known videos in one batch (one Python
+        # process, one transaction). Runs for every channel, even when there
+        # are no brand-new videos.
+        if [[ -s "$refresh_file" ]]; then
+            local refresh_count
+            refresh_count=$(wc -l < "$refresh_file" | tr -d ' ')
+            db insert-batch "$refresh_file"
+            log_msg "  Refreshed metadata for $refresh_count existing video(s)."
+        fi
 
         local new_count
         new_count=$(wc -l < "$new_ids_file" | tr -d ' ')
@@ -936,7 +965,7 @@ PYEOF
 
         if [[ "$new_count" -eq 0 ]]; then
             log_msg "  No new videos for this channel."
-            rm -f "$rssfile" "$new_ids_file" "$rss_map_file"
+            rm -f "$rssfile" "$new_ids_file" "$rss_map_file" "$refresh_file"
             continue
         fi
 
@@ -959,12 +988,13 @@ PYEOF
             meta=$(grep -m1 "^${vid_id}"$'\t' "$rss_map_file" | cut -f2-)
 
             if [[ -n "$meta" ]]; then
-                # Build the 7-column row (meta already carries the embedded
-                # title<TAB>channel<TAB>date) and insert it into the DB. The UI
-                # sees the new row on its next poll (<=400 ms).
+                # Build the 8-column row (meta already carries the embedded
+                # title<TAB>channel<TAB>date; channel_id is appended last) and
+                # insert it into the DB. The UI sees the new row on its next
+                # poll (<=400 ms).
                 local row
-                row=$(printf '%s\t%s\t%s\tyoutube\thttps://www.youtube.com/watch?v=%s' \
-                      "$vid_id" "$meta" "$dur" "$vid_id")
+                row=$(printf '%s\t%s\t%s\tyoutube\thttps://www.youtube.com/watch?v=%s\t%s' \
+                      "$vid_id" "$meta" "$dur" "$vid_id" "$channel_id")
                 db insert-line "$row"
                 log_msg "    -> inserted into DB: $vid_id"
                 # Also register in cached_ids so subsequent channels in this
@@ -977,7 +1007,7 @@ PYEOF
             sleep 0.4
         done < "$new_ids_file"
 
-        rm -f "$rssfile" "$new_ids_file" "$rss_map_file"
+        rm -f "$rssfile" "$new_ids_file" "$rss_map_file" "$refresh_file"
 
     done < "$SUBS"
     fi   # yt_enabled

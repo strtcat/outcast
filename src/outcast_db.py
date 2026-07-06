@@ -94,7 +94,11 @@ def _row_to_dict(r: sqlite3.Row) -> dict:
 
 
 def parse_tsv_line(line: str) -> dict | None:
-    """Parse a 7-column TSV line (id,title,channel,date,duration,source,url)."""
+    """Parse a TSV line: id,title,channel,date,duration,source,url[,channel_id].
+
+    The trailing channel_id column is optional so legacy 7-column lines still
+    parse (channel_id then defaults to '').
+    """
     parts = line.rstrip("\n").split("\t")
     if len(parts) < 4:
         return None
@@ -106,13 +110,14 @@ def parse_tsv_line(line: str) -> dict | None:
     if not url and source == DEFAULT_SOURCE:
         url = f"https://www.youtube.com/watch?v={vid_id}"
     return {
-        "vid_id":   vid_id,
-        "title":    parts[1],
-        "channel":  parts[2],
-        "date":     parts[3],
-        "duration": parts[4] if len(parts) > 4 else "?",
-        "source":   source,
-        "url":      url,
+        "vid_id":     vid_id,
+        "title":      parts[1],
+        "channel":    parts[2],
+        "date":       parts[3],
+        "duration":   parts[4] if len(parts) > 4 else "?",
+        "source":     source,
+        "url":        url,
+        "channel_id": parts[7] if len(parts) > 7 else "",
     }
 
 
@@ -120,7 +125,15 @@ def parse_tsv_line(line: str) -> dict | None:
 # Writes
 # -----------------------------------------------------------------------------
 def upsert(con: sqlite3.Connection, video: dict, commit: bool = True) -> None:
-    """Insert a new video, or just refresh last_seen_at if it already exists."""
+    """Insert a new video, or refresh its metadata if it already exists.
+
+    On conflict we refresh the fields that can legitimately change upstream
+    (title/channel/date — e.g. a video the uploader later renamed), while
+    preserving an already-known duration or channel_id when the incoming row
+    carries only a placeholder ('?' duration or empty channel_id). This is what
+    lets a metadata-only refresh pass fix renamed videos without having to
+    re-resolve their duration.
+    """
     now = int(time.time())
     con.execute(
         """
@@ -129,7 +142,17 @@ def upsert(con: sqlite3.Connection, video: dict, commit: bool = True) -> None:
              fetched_at, last_seen_at)
         VALUES (:vid_id, :title, :channel, :channel_id, :date, :duration,
                 :source, :url, :now, :now)
-        ON CONFLICT(id) DO UPDATE SET last_seen_at = :now
+        ON CONFLICT(id) DO UPDATE SET
+            title        = excluded.title,
+            channel      = excluded.channel,
+            date         = excluded.date,
+            channel_id   = CASE WHEN excluded.channel_id <> ''
+                                THEN excluded.channel_id ELSE videos.channel_id END,
+            duration     = CASE WHEN excluded.duration NOT IN ('', '?')
+                                THEN excluded.duration ELSE videos.duration END,
+            url          = CASE WHEN excluded.url <> ''
+                                THEN excluded.url ELSE videos.url END,
+            last_seen_at = :now
         """,
         {
             "vid_id":     video["vid_id"],
@@ -145,6 +168,28 @@ def upsert(con: sqlite3.Connection, video: dict, commit: bool = True) -> None:
     )
     if commit:
         con.commit()
+
+
+def insert_batch(con: sqlite3.Connection, path: str) -> int:
+    """Upsert every TSV line in *path* in a single transaction.
+
+    Used by the crawler's metadata-refresh pass: one Python process and one
+    commit per channel instead of one per video.
+    """
+    n = 0
+    try:
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                if not line.strip():
+                    continue
+                v = parse_tsv_line(line)
+                if v is not None:
+                    upsert(con, v, commit=False)
+                    n += 1
+    except FileNotFoundError:
+        return 0
+    con.commit()
+    return n
 
 
 def delete_ids(con: sqlite3.Connection, ids) -> int:
@@ -292,6 +337,11 @@ def _main(argv: list[str]) -> int:
             v = parse_tsv_line(argv[1])
             if v is not None:
                 upsert(con, v)
+            return 0
+        if cmd == "insert-batch":
+            if len(argv) < 2:
+                return 2
+            insert_batch(con, argv[1])
             return 0
         if cmd == "trim":
             trim(con, int(argv[1]) if len(argv) > 1 else 0)
